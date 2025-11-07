@@ -13,30 +13,34 @@ export default function TDSExamHelper() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // ---- handle file selection / removal ----
+  // --- File Handling ---
   const handleFileChange = (e) => setFiles(Array.from(e.target.files));
   const removeFile = (i) => setFiles(files.filter((_, idx) => idx !== i));
 
-  // ---- smart file reader ----
+  // --- Smart file reader ---
   const readFileSmart = (file) =>
     new Promise((resolve) => {
       const reader = new FileReader();
       const type = file.type || "";
+
       reader.onload = () => {
         let content = "";
         if (type.includes("text") || type.includes("csv") || type.includes("json"))
-          content = reader.result.slice(0, 100000);
+          content = reader.result.slice(0, 100000); // 100KB limit
         else if (type.includes("pdf") || type.includes("image"))
           content = `[Base64 ${type.split("/")[1]} file, ${(file.size / 1024).toFixed(0)} KB]`;
-        else content = `[Unsupported file ${file.name}, ${(file.size / 1024).toFixed(0)} KB]`;
+        else
+          content = `[Unsupported file ${file.name} (${type}), ${(file.size / 1024).toFixed(0)} KB]`;
+
         resolve({ name: file.name, type, content });
       };
+
       if (type.includes("text") || type.includes("csv") || type.includes("json"))
         reader.readAsText(file);
       else reader.readAsDataURL(file);
     });
 
-  // ---- GPT-5 call ----
+  // --- GPT-5 call (Responses API) ---
   const callGPT = async (prompt) => {
     const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
     if (!apiKey) throw new Error("Missing VITE_OPENAI_API_KEY in .env");
@@ -48,14 +52,21 @@ export default function TDSExamHelper() {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-5",
+        model: "gpt-5", // fallback to "gpt-4.1" if not available
         input: prompt,
-        temperature: 0.4,
-        max_output_tokens: 4000,
+        temperature: 0.5,
+        max_output_tokens: 2000,
       }),
     });
-    if (!res.ok) throw new Error(`OpenAI API error: ${res.status}`);
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("OpenAI API error body:", errText);
+      throw new Error(`OpenAI API error: ${res.status}`);
+    }
+
     const data = await res.json();
+    // Handle various possible output formats
     return (
       data.output_text ||
       (data.output || [])
@@ -68,12 +79,13 @@ export default function TDSExamHelper() {
     );
   };
 
-  // ---- handle submit ----
+  // --- Submit handler ---
   const handleSubmit = async () => {
     if (!question.trim() && files.length === 0) {
       setError("Please enter a question and/or upload at least one file.");
       return;
     }
+
     setLoading(true);
     setError("");
     setResponseText("");
@@ -87,10 +99,9 @@ export default function TDSExamHelper() {
         )
         .join("\n");
 
-      // 🔹 The core prompt that tells GPT-5 what to do:
-      const prompt = `
-You are an expert assistant for Tools and Data Science.
-The user will provide files and a task. Perform the task using the file contents if relevant.
+      const fullPrompt = `
+You are an expert Tools and Data Science assistant.
+You can perform any task described by the user using uploaded files.
 
 QUESTION/TASK:
 ${question}
@@ -98,13 +109,14 @@ ${question}
 UPLOADED FILES:
 ${fileSummary}
 
-Please return a single, complete result.
+Perform the requested action carefully.
+Return the exact results requested.
 Format:
-**FINAL ANSWER:** [result]
+**FINAL ANSWER:** [Result]
 Confidence: [High/Medium/Low]
       `.trim();
 
-      const result = await callGPT(prompt);
+      const result = await callGPT(fullPrompt);
       setResponseText(result);
     } catch (err) {
       console.error(err);
@@ -114,19 +126,18 @@ Confidence: [High/Medium/Low]
     }
   };
 
-  // ---- render ----
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
       <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden">
         <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white">
           <h1 className="text-3xl font-bold">🧠 TDS Exam Helper (GPT-5)</h1>
           <p className="text-blue-100 text-sm">
-            Ask a question and upload files — GPT-5 will perform the requested action on them.
+            Upload files and enter a question — GPT-5 performs the task for you.
           </p>
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Question */}
+          {/* Question Input */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               Your Question / Task
@@ -134,13 +145,13 @@ Confidence: [High/Medium/Low]
             <textarea
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Example: 'Summarize this PDF' or 'Extract column names from this CSV'"
+              placeholder="e.g., Summarize this PDF or Extract data from this CSV"
               className="w-full h-32 px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 resize-none"
               disabled={loading}
             />
           </div>
 
-          {/* Files */}
+          {/* File Upload */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               Upload Files (any type)
@@ -179,7 +190,7 @@ Confidence: [High/Medium/Low]
             )}
           </div>
 
-          {/* Submit */}
+          {/* Submit Button */}
           <button
             onClick={handleSubmit}
             disabled={loading}
@@ -198,7 +209,7 @@ Confidence: [High/Medium/Low]
             )}
           </button>
 
-          {/* Error */}
+          {/* Error Display */}
           {error && (
             <div className="p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg flex items-start space-x-3">
               <AlertCircle className="text-red-500 mt-0.5" size={20} />
@@ -206,7 +217,7 @@ Confidence: [High/Medium/Low]
             </div>
           )}
 
-          {/* Output */}
+          {/* GPT Output */}
           {responseText && (
             <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-4 whitespace-pre-wrap">
               <h3 className="font-semibold text-gray-700 mb-2 flex items-center">
@@ -220,4 +231,5 @@ Confidence: [High/Medium/Low]
       </div>
     </div>
   );
-}
+                           }
+            
